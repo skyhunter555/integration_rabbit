@@ -1,0 +1,14 @@
+rabbit:
+  container_name: dev_rabbit
+  hostname: rabbit
+  image: rabbitmq:3.6.6-management
+  environment:
+  - RABBITMQ_DEFAULT_USER=user
+  - RABBITMQ_DEFAULT_PASS=user
+  - RABBITMQ_DEFAULT_VHOST=user
+  ports:
+  - "5672:5672"
+  - "15672:15672"
+
+# http://localhost:15672/#/users GUI - интерфейс,
+# user/user логин пароль

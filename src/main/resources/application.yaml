@@ -1,0 +1,28 @@
+logging:
+  config: classpath:log4j2.xml
+consumer:
+  work-time: 100
+spring:
+  main:
+    web-application-type: NONE
+  rabbitmq:
+    listener:
+      simple:
+        acknowledge-mode: manual
+        retry:
+          enabled: true
+          initial-interval: 3s
+          max-attempts: 6
+          max-interval: 10s
+          multiplier: 2
+
+jms:
+  rabbit-mq:
+    host: "localhost"
+    port: 5672
+    virtual-host: "user"
+    username: "user"
+    password: "user"
+    exchange-input-name: "userinput"
+    queue-input-name: "inputqueue"
+    queue-output-name: "outputqueue"
