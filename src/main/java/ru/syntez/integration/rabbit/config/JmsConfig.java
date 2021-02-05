@@ -10,25 +10,21 @@ import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
-import org.springframework.amqp.rabbit.listener.api.ChannelAwareMessageListener;
 import org.springframework.amqp.rabbit.transaction.RabbitTransactionManager;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.integration.dsl.MessageChannels;
+import org.springframework.integration.amqp.dsl.Amqp;
+import org.springframework.integration.dsl.IntegrationFlow;
+import org.springframework.integration.dsl.IntegrationFlows;
 import org.springframework.integration.dsl.Pollers;
 import org.springframework.integration.scheduling.PollerMetadata;
 import org.springframework.integration.transaction.TransactionInterceptorBuilder;
-import org.springframework.messaging.MessageChannel;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import ru.syntez.integration.rabbit.IntegrationRabbitMain;
-import ru.syntez.integration.rabbit.entities.RoutingDocument;
 import ru.syntez.integration.rabbit.utils.JmsXmlMessageConverter;
-import java.nio.charset.Charset;
 
 /**
  * Configuration for spring integration jms
@@ -36,6 +32,7 @@ import java.nio.charset.Charset;
  * 2. Create queue and binds
  * 3. Create RabbitTemplate
  * 4. Create IntegrationFlow to routing documents
+ * 5. TransactionManager
  *
  * @author Skyhunter
  * @date 04.02.2021
@@ -62,15 +59,16 @@ public class JmsConfig {
     private String password = "user";
 
     @Value("${jms.rabbit-mq.exchange-input-name}")
-    private String exchangeInputName = "user";
+    private String exchangeInputName = "exchangeInput";
+
+    @Value("${jms.rabbit-mq.exchange-output-name}")
+    private String exchangeOutputName = "exchangeOutput";
 
     @Value("${jms.rabbit-mq.queue-input-name}")
     private String queueInputName = "input";
 
     @Value("${jms.rabbit-mq.queue-output-name}")
     private String queueOutputName = "output";
-
-    private Integer consumedDocumentCount = 0;
 
     @Bean
     public ConnectionFactory connectionFactory() {
@@ -80,13 +78,17 @@ public class JmsConfig {
         connectionFactory.setVirtualHost(virtualHost);
         connectionFactory.setUsername(username);
         connectionFactory.setPassword(password);
-        //connectionFactory.setA
         return connectionFactory;
     }
 
     @Bean
     public DirectExchange directInputExchange() {
         return new DirectExchange(exchangeInputName);
+    }
+
+    @Bean
+    public DirectExchange directOutputExchange() {
+        return new DirectExchange(exchangeOutputName);
     }
 
     @Bean
@@ -106,7 +108,7 @@ public class JmsConfig {
 
     @Bean
     public Binding bindingOutputOrderQueue() {
-        return BindingBuilder.bind(outputQueue()).to(directInputExchange()).withQueueName();
+        return BindingBuilder.bind(outputQueue()).to(directOutputExchange()).withQueueName();
     }
 
     @Bean
@@ -132,7 +134,9 @@ public class JmsConfig {
 
     @Bean
     public PlatformTransactionManager transactionManager(final ConnectionFactory connectionFactory) {
-        return new RabbitTransactionManager(connectionFactory);
+        RabbitTransactionManager rabbitTransactionManager = new RabbitTransactionManager(connectionFactory);
+        rabbitTransactionManager.setRollbackOnCommitFailure(true);
+        return rabbitTransactionManager;
     }
 
     @Bean(name = PollerMetadata.DEFAULT_POLLER)
@@ -145,37 +149,15 @@ public class JmsConfig {
                 .get();
     }
 
-    @Autowired
-    private IntegrationConsumer integrationConsumer;
-
     @Bean
-    public SimpleMessageListenerContainer simpleMessageListenerContainer(final ConnectionFactory connectionFactory) {
-        SimpleMessageListenerContainer container = new SimpleMessageListenerContainer(connectionFactory);
-        container.setDefaultRequeueRejected(false);
-        container.setAcknowledgeMode(AcknowledgeMode.MANUAL);
-        container.setExposeListenerChannel(true);
-        container.setMaxConcurrentConsumers(2);
-        container.setConcurrentConsumers(1);
-        container.setQueues(inputQueue());
-        container.setMessageListener((ChannelAwareMessageListener) (message, channel) -> {
-            final String xmlPayload = new String(message.getBody(), Charset.defaultCharset());
-            try {
-                RoutingDocument document = xmlMapper().readValue(xmlPayload, RoutingDocument.class);
-                final boolean success = integrationConsumer.execute(document);
-                if (success) {
-                    rabbitInputTemplate().convertAndSend(queueOutputName, xmlPayload);
-                    channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
-                }
-            } catch (Exception e) {
-                LOG.error(String.format("Error send files %s", e.getMessage()));
-            }
-        });
-        return container;
-    }
-
-    @Bean
-    public MessageChannel channelInput() {
-        return MessageChannels.queue(queueInputName).get();
+    public IntegrationFlow myFlowInputToOutput() {
+        return IntegrationFlows.from(Amqp.inboundAdapter(connectionFactory(), inputQueue()))
+                .channel(
+                        Amqp.pollableChannel(connectionFactory())
+                                .queueName(queueOutputName)
+                                .channelTransacted(true)
+                )
+                .get();
     }
 
 }
